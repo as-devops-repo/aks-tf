@@ -1,0 +1,57 @@
+name: "Terraform Plan"
+
+trigger:
+  - main
+
+variables:
+  - group: tf-group
+  - group: az-group
+  - template: ../variables.yml
+
+stages:
+  - stage: TerraformPlan
+    displayName: 'Terraform Plan Stage'
+    jobs:
+      - job: TerraformPlanJob
+        displayName: 'Terraform Plan'
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+        
+          - checkout: self
+            displayName: 'Checkout Repo'
+
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: 'latest'
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Init'
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              workingDirectory: "$(System.DefaultWorkingDirectory)/$(workingDirectory)"
+              backendServiceArm: "$(serviceConnection)"
+              backendAzureRmResourceGroupName: "$(backendResourceGroupName)"
+              backendAzureRmStorageAccountName: "$(backendStorageAccountName)"
+              backendAzureRmContainerName: "$(backendStorageAccountContainerName)"
+              backendAzureRmKey: 'terraform.tfstate'
+            env:
+              ARM_USE_AZUREAD: true
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Plan'
+            inputs:
+              provider: 'azurerm'
+              command: 'plan'
+              workingDirectory: "$(System.DefaultWorkingDirectory)/$(workingDirectory)"
+              commandOptions: '-lock=false -out=$(System.DefaultWorkingDirectory)/$(workingDirectory)/terraform.tfplan'
+              environmentServiceNameAzureRM: "$(serviceConnection)"
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish artifact for apply stage'
+            inputs:
+              targetPath: '$(workingDirectory)'
+              artifact: 'terraformPlan'
+              publishLocation: 'pipeline'

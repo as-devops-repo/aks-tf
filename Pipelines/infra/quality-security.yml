@@ -1,0 +1,205 @@
+name: "Quality and Security"
+
+trigger: none
+
+variables:
+  - template: ../variables.yml
+
+stages:
+  - stage: CodeQuality
+    displayName: 'Check Code Quality'
+    jobs:
+      - job: ValidateTerraform
+        displayName: 'Validate Terraform'
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+
+          - task: TerraformInstaller@0
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: 'latest'
+
+          - pwsh: terraform fmt -check -diff
+            displayName: 'Terraform Format Check'
+            workingDirectory: "$(workingDirectory)"
+
+          - pwsh: terraform init -backend=false
+            displayName: 'Terraform Init'
+            workingDirectory: "$(workingDirectory)"
+
+          - pwsh: terraform validate
+            displayName: 'Terraform Validate'
+            workingDirectory: "$(workingDirectory)"
+
+      - job: TFLintJob
+        displayName: 'Run TFLint Scan'
+        dependsOn: ValidateTerraform
+        steps:
+
+          - script: |
+              mkdir TFLintReport
+              docker pull ghcr.io/terraform-linters/tflint-bundle:latest
+
+              docker run \
+                --rm \
+                --volume $(System.DefaultWorkingDirectory)/$(workingDirectory):/data \
+                -t ghcr.io/terraform-linters/tflint-bundle \
+                  --module \
+                  --format junit > $(System.DefaultWorkingDirectory)/TFLintReport/TFLint-Report.xml
+
+            displayName: 'TFLint Static Code Analysis'
+            name: TFLintScan
+            condition: always()
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish Artifact: TFLint Report'
+            condition: succeededOrFailed()
+            inputs:
+              PathtoPublish: "$(System.DefaultWorkingDirectory)/TFLintReport"
+              ArtifactName: TFLintReport
+
+          - task: PublishTestResults@2
+            displayName: 'Publish TFLint Test Results'
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '**/*TFLint-Report.xml'
+              searchFolder: "$(System.DefaultWorkingDirectory)/TFLintReport"
+              mergeTestResults: false
+              testRunTitle: 'TFLint Scan'
+              failTaskOnFailedTests: false
+              publishRunAttachments: true
+
+          - bash: |
+              docker rmi "ghcr.io/terraform-linters/tflint-bundle" -f | true
+            displayName: 'Remove Terraform Quality Check Docker Images'
+            condition: always()
+
+  - stage: Security
+    displayName: 'Security Scanning'
+    dependsOn: CodeQuality
+    jobs:
+      - job: TrivyFileSystemJob
+        displayName: 'Run Trivy FileSystem Scan'
+        steps:
+
+          - task: trivy@1
+            displayName: 'Scan Application Files'
+            inputs:
+              version: 'latest'
+              debug: true
+              path: 'Application'
+              exitCode: 0
+
+          - task: trivy@1
+            displayName: 'Scan IaC Files'
+            inputs:
+              version: 'latest'
+              debug: true
+              path: "$(workingDirectory)"
+              exitCode: 0
+
+      - job: TFSecJob
+        displayName: 'Run tfsec Scan'
+        steps:
+
+          - task: tfsec@1
+            inputs:
+              version: 'v1.28.4'
+              dir: "$(workingDirectory)"
+              debug: true
+              args: --soft-fail
+              publishTestResults: true
+
+      - job: CheckovJob
+        displayName: 'Run Checkov Scan'
+        dependsOn: TFSecJob
+        condition: succeededOrFailed()
+        steps:
+
+          - script: |
+              mkdir CheckovReport
+              docker pull bridgecrew/checkov:latest
+
+              docker run \
+                --volume $(System.DefaultWorkingDirectory)/$(workingDirectory):/tf \
+                bridgecrew/checkov \
+                  --soft-fail \
+                  --directory /tf \
+                  --output junitxml > $(System.DefaultWorkingDirectory)/CheckovReport/Checkov-Report.xml
+
+            displayName: 'Checkov Static Code Analysis'
+            name: CheckovScan
+            condition: always()
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish Artifact: Checkov Report'
+            condition: succeededOrFailed()
+            inputs:
+              PathtoPublish: "$(System.DefaultWorkingDirectory)/CheckovReport"
+              ArtifactName: CheckovReport
+
+          - task: PublishTestResults@2
+            displayName: 'Publish Checkov Test Results'
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '**/*Checkov-Report.xml'
+              searchFolder: "$(System.DefaultWorkingDirectory)/CheckovReport"
+              mergeTestResults: false
+              testRunTitle: 'Checkov Scan'
+              failTaskOnFailedTests: false
+              publishRunAttachments: true
+
+          - bash: |
+              docker rmi "bridgecrew/checkov" -f | true
+            displayName: 'Remove Terraform Quality Check Docker Images'
+            condition: always()
+
+      - job: TerraScanJob
+        displayName: 'Run TerraScan Scan'
+        dependsOn: CheckovJob
+        condition: succeededOrFailed()
+        steps:
+        
+          - script: |
+              mkdir TerraScanReport
+              docker pull tenable/terrascan
+              docker run \
+                --rm \
+                --volume $(System.DefaultWorkingDirectory)/$(workingDirectory):/iac \
+                --workdir /iac \
+                tenable/terrascan:latest scan \
+                  --iac-type terraform \
+                  --policy-type all \
+                  --verbose \
+                  --output junit-xml > $(System.DefaultWorkingDirectory)/TerraScanReport/TerraScan-Report.xml
+            displayName: 'Run terrascan in Docker'
+            name: TerraScan
+            condition: always()
+
+          - script: |
+              cd $(System.DefaultWorkingDirectory)/TerraScanReport
+              ls -la
+            displayName: 'Dir Contents'
+            condition: always()
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish Artifact: Terrascan Report'
+            condition: succeededOrFailed()
+            inputs:
+              PathtoPublish: "$(System.DefaultWorkingDirectory)/TerraScanReport"
+              ArtifactName: TerrascanReport
+
+          - task: PublishTestResults@2
+            displayName: 'Publish Terrascan Test Results'
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '**/*TerraScan-Report.xml'
+              searchFolder: "$(System.DefaultWorkingDirectory)/TerraScanReport"
+              mergeTestResults: false
+              testRunTitle: 'Terrascan Scan'
+              failTaskOnFailedTests: false
+              publishRunAttachments: true

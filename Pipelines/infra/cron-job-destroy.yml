@@ -1,0 +1,63 @@
+name: "Scheduled Terraform Destroy"
+
+trigger: none
+
+schedules:
+- cron: '0 18 * * *'
+  displayName: Scheduled Terraform Destroy
+  branches:
+    include:
+    - main
+  always: true
+
+variables:
+  - group: tf-group
+  - group: az-group
+  - template: ../variables.yml
+
+stages:
+  - stage: destroyInfra
+    displayName: 'Destroy Infra'
+    jobs:
+      - deployment: DestroyInfrastructure
+        displayName: 'Terraform Destroy'
+        pool:
+          vmImage: ubuntu-latest
+        environment: 'Dev'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+              
+                - checkout: self
+                  displayName: 'Checkout Repo'
+
+                - task: TerraformInstaller@0
+                  displayName: 'Install Terraform'
+                  inputs:
+                    terraformVersion: 'latest'
+
+                - task: TerraformTaskV4@4
+                  displayName: 'Terraform Init'
+                  inputs:
+                    provider: 'azurerm'
+                    command: 'init'
+                    workingDirectory: "$(workingDirectory)"
+                    backendServiceArm: "$(serviceConnection)"
+                    backendAzureRmResourceGroupName: "$(backendResourceGroupName)"
+                    backendAzureRmStorageAccountName: "$(backendStorageAccountName)"
+                    backendAzureRmContainerName: "$(backendStorageAccountContainerName)"
+                    backendAzureRmKey: 'terraform.tfstate'
+                  env:
+                    ARM_USE_AZUREAD: true
+
+                - task: TerraformTaskV4@4
+                  displayName: 'Terraform Destroy'
+                  inputs:
+                    provider: 'azurerm'
+                    command: 'destroy'
+                    workingDirectory: "$(workingDirectory)"
+                    commandOptions: '-auto-approve'
+                    environmentServiceNameAzureRM: "$(serviceConnection)"
+                  env:
+                    ARM_USE_AZUREAD: true                    

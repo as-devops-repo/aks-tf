@@ -1,0 +1,9 @@
+variables:
+  projectName: 'cosmos-aks-samples'
+  workingDirectory : Terraform
+  workingDirectoryPath: '$(Pipeline.Workspace)/terraformPlan'
+  buildConfiguration: 'Release'
+  tag: '$(Build.BuildId)'
+  todoAppRepository: 'todo'
+  
+

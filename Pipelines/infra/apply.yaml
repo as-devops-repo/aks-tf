@@ -1,0 +1,73 @@
+name: "Terraform Apply"
+
+trigger: none
+
+resources:
+  pipelines:
+    - pipeline: planPipeline
+      source: plan.yaml
+      trigger: true
+
+variables:
+  - group: tf-group
+  - group: az-group
+  - template: ../variables.yml
+
+stages:
+  - stage: TerraformApply
+    displayName: 'Terraform Apply Stage'
+    jobs:
+      - deployment: DeployInfrastructure
+        displayName: 'Deploy infrastructure'
+        pool:
+          vmImage: ubuntu-latest
+        environment: 'Dev'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+              
+                - checkout: self
+                  displayName: 'Checkout Repo'
+
+                - task: DownloadPipelineArtifact@2
+                  displayName: 'Download Terraform Plan'
+                  inputs:
+                    buildType: 'specific'
+                    buildVersionToDownload: 'latest'
+                    project: "$(projectName)"
+                    definition: plan.yaml
+                    artifactName: 'terraformPlan'
+                    path: '$(Pipeline.Workspace)/terraformPlan'
+
+                - task: TerraformInstaller@1
+                  displayName: 'Install Terraform'
+                  inputs:
+                    terraformVersion: 'latest'            
+
+                - script: rm -rf $(workingDirectoryPath)/.terraform/providers
+                  displayName: 'Remove Terraform Providers'
+
+                - task: TerraformTaskV4@4
+                  displayName: 'Terraform Init'
+                  inputs:
+                    provider: 'azurerm'
+                    command: 'init'
+                    commandOptions: '-reconfigure'
+                    workingDirectory: "$(workingDirectoryPath)"
+                    backendServiceArm: "$(serviceConnection)"
+                    backendAzureRmResourceGroupName: "$(backendResourceGroupName)"
+                    backendAzureRmStorageAccountName: "$(backendStorageAccountName)"
+                    backendAzureRmContainerName: "$(backendStorageAccountContainerName)"
+                    backendAzureRmKey: 'terraform.tfstate'
+                  env:
+                    ARM_USE_AZUREAD: true
+
+                - task: TerraformTaskV4@4
+                  displayName: 'Apply Terraform'
+                  inputs:
+                    provider: 'azurerm'
+                    command: 'apply'
+                    workingDirectory: "$(workingDirectoryPath)"
+                    environmentServiceNameAzureRM: "$(serviceConnection)"
+                    commandOptions: "-lock=true -lock-timeout=1m $(workingDirectoryPath)/terraform.tfplan"
